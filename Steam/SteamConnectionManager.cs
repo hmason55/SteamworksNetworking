@@ -10,4 +10,21 @@ public class SteamConnectionManager : ConnectionManager
     {
         OnConnectionMessage(data, size);
     }
+
+    public new void Close()
+    {
+        try
+        {
+            if (Connected)
+            {
+                Connection.Flush();
+                Connection.Close();
+                base.Close();
+            }
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine($"An error occured when shutting down the Steam Connection Manager: {e.Message}");
+        }
+    }
 }

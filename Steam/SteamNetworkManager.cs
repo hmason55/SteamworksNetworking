@@ -4,7 +4,7 @@ using SteamworksNetworking.Models;
 
 namespace SteamworksNetworking.Steam;
 
-public sealed class SteamNetworkManager
+public sealed class SteamNetworkManager : IDisposable
 {
     private static readonly Lazy<SteamNetworkManager> lazy = new(() => new());
     public static SteamNetworkManager Instance { get { return lazy.Value; } }
@@ -13,7 +13,7 @@ public sealed class SteamNetworkManager
     private static SteamConnectionManager ConnectionManager { get; set; }
     private static SteamSocketManager SocketManager { get; set; }
 
-    public static uint AppId { get; private set; }
+    public static uint AppId { get => SteamClient.AppId; }
     public static Lobby CurrentLobby { get; private set; }
     public static bool IsSteamConnected { get; private set; }
     public static bool IsHost => CurrentLobby.IsOwnedBy(SteamClient.SteamId);
@@ -28,6 +28,11 @@ public sealed class SteamNetworkManager
     public static event Action<Lobby, Friend> OnLobbyMemberDisconnected;
     public static event Action<Lobby, Friend> OnLobbyMemberLeave;
     public static event Action<Lobby, SteamId> OnGameLobbyJoinRequested;
+
+    private static CancellationTokenSource ReceiveDataTokenSource = new();
+    private bool disposedValue;
+
+    private static Task ReceiveDataTask { get; set; }
 
     public static void AddHandlers(IEnumerable<KeyValuePair<ushort, MessageHandler>> handlers)
     {
@@ -63,6 +68,8 @@ public sealed class SteamNetworkManager
 
         try
         {
+            SetupCallbacks();
+
             // Create client
             SteamClient.Init(appId, true);
 
@@ -73,7 +80,8 @@ public sealed class SteamNetworkManager
             }
 
             IsSteamConnected = true;
-            SetupCallbacks();
+
+            ReceiveDataTask ??= Task.Run(() => ReceiveData());
 
             Console.WriteLine($"Connected to Steam as {SteamClient.Name}.");
         }
@@ -86,18 +94,26 @@ public sealed class SteamNetworkManager
 
     public static void Disconnect()
     {
-        if (!IsSteamConnected)
-        {
-            return;
-        }
-
-        IsSteamConnected = false;
+        LeaveLobby();
         SteamClient.Shutdown();
+        IsSteamConnected = false;
+
+        Console.WriteLine($"You disconnected from Steam.");
     }
 
     public static void RunCallbacks()
     {
         SteamClient.RunCallbacks();
+
+        if(SocketManager != null)
+        {
+            SocketManager.Receive();
+        }
+
+        if (ConnectionManager != null)
+        {
+            ConnectionManager.Receive();
+        }
     }
 
     public static void BroadcastMessage(byte[] data)
@@ -137,17 +153,16 @@ public sealed class SteamNetworkManager
     private static void OnSocketMessage(Connection connection, IntPtr data, int size) => HandleMessage(connection.Id, new(data.ToBytes(size)));
     private static void OnConnectionMessage(IntPtr data, int size) => HandleMessage(CurrentLobby.Owner.Id, new(data.ToBytes(size)));
     
-    public async Task<bool> CreateLobby(LobbySettings settings = new())
+    public async Task<bool> CreateLobby(LobbySettings settings = default)
     {
         try
         {
-            Console.WriteLine("Creating Lobby...");
+            Console.WriteLine("Creating lobby...");
             Lobby? createdLobby = await SteamMatchmaking.CreateLobbyAsync(settings.MaxPlayers);
 
             if (!createdLobby.HasValue)
             {
-                Console.WriteLine("Unable to create lobby.");
-                throw new Exception();
+                throw new Exception("Unable to create lobby.");
             }
 
             Lobby lobby = createdLobby.Value;
@@ -173,14 +188,17 @@ public sealed class SteamNetworkManager
                 lobby.SetInvisible();
             }
 
-            foreach(KeyValuePair<string, string> kvp in settings.Data)
+            if(settings.Data != null)
             {
-                lobby.SetData(kvp.Key, kvp.Value);
+                foreach (KeyValuePair<string, string> kvp in settings.Data)
+                {
+                    lobby.SetData(kvp.Key, kvp.Value);
+                }
             }
 
             CurrentLobby = lobby;
 
-            Console.WriteLine("Lobby was created.");
+            Console.WriteLine("You created a lobby.");
             return true;
         }
         catch (Exception e)
@@ -202,6 +220,8 @@ public sealed class SteamNetworkManager
 
         ConnectionManager = SteamNetworkingSockets.ConnectRelay<SteamConnectionManager>(SteamClient.SteamId);
         ConnectionManager.OnConnectionMessage += OnConnectionMessage;
+
+        Console.WriteLine($"You created a socket server.");
     }
 
     private static void JoinSocketServer(Lobby lobby)
@@ -213,9 +233,11 @@ public sealed class SteamNetworkManager
 
         ConnectionManager = SteamNetworkingSockets.ConnectRelay<SteamConnectionManager>(lobby.Owner.Id, 0);
         ConnectionManager.OnConnectionMessage += OnConnectionMessage;
+
+        Console.WriteLine($"Joined {lobby.Owner.AsPossessive(SteamClient.SteamId)} socket server.");
     }
 
-    public static void HandleMessage(ulong senderId, Message message)
+    private static void HandleMessage(ulong senderId, Message message)
     {
         ushort id = message.ReadUShort();
 
@@ -234,5 +256,52 @@ public sealed class SteamNetworkManager
         {
             Console.WriteLine($"An error occurred when handling the message: {e.Message}");
         }
+    }
+
+    public static void LeaveLobby()
+    {
+        CurrentLobby.Leave();
+        Console.WriteLine($"You left {CurrentLobby.Owner.AsPossessive(SteamClient.SteamId)} lobby.");
+
+        ReceiveDataTokenSource.Cancel();
+        ConnectionManager?.Close();
+        SocketManager?.Close();
+    }
+
+    private static void ReceiveData()
+    {
+        while (true)
+        {
+            if(ReceiveDataTokenSource.Token.IsCancellationRequested)
+            {
+                ReceiveDataTask = null;
+                return;
+            }
+
+            if (IsSteamConnected)
+            {
+                RunCallbacks();
+            }
+        }
+    }
+
+    private void Dispose(bool disposing)
+    {
+        if (!disposedValue)
+        {
+            if (disposing)
+            {
+                return;
+            }
+
+            Disconnect();
+            disposedValue = true;
+        }
+    }
+
+    public void Dispose()
+    {
+        Dispose(disposing: true);
+        GC.SuppressFinalize(this);
     }
 }

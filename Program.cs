@@ -1,4 +1,6 @@
-﻿using SteamworksNetworking;
+﻿using Steamworks;
+using Steamworks.Data;
+using SteamworksNetworking;
 using SteamworksNetworking.Models;
 using SteamworksNetworking.Steam;
 
@@ -6,7 +8,13 @@ public class Program
 {
     public static async Task Main(string[] args)
     {
-        TestPackUnpackMessage();
+        await TestConnect();
+
+        await Task.Delay(2000);
+
+        SteamNetworkManager.Disconnect();
+
+        await Task.Delay(2000);
     }
 
     public static void TestPackUnpackMessage()
@@ -29,7 +37,7 @@ public class Program
         Console.WriteLine(outData.Print());
     }
 
-    public async Task TestConnect()
+    public static async Task TestConnect()
     {
         // Replace this with your steam app id.
         uint myAppId = 123;
@@ -40,8 +48,15 @@ public class Program
         // Connect to Steam
         SteamNetworkManager.Connect(myAppId);
 
-        // Setup a lobby.
-        await SteamNetworkManager.Instance.CreateLobby();
+        if(!SteamNetworkManager.IsSteamConnected)
+        {
+            return;
+        }
 
+        // Setup a lobby.
+        if(!await SteamNetworkManager.Instance.CreateLobby())
+        {
+            return;
+        }
     }
 }

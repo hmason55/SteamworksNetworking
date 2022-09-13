@@ -11,4 +11,25 @@ public class SteamSocketManager : SocketManager
     {
         OnSocketMessage(connection, data, size);
     }
+
+    public new void Close()
+    {
+        try
+        {
+            if (Connected?.Any() ?? false)
+            {
+                foreach (Connection connection in Connected ?? new())
+                {
+                    connection.Flush();
+                    connection.Close();
+                }
+
+                base.Close();
+            }
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine($"An error occured when shutting down the Steam Socket Manager: {e.Message}");
+        }
+    }
 }
